@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
 	"os"
+	"regexp"
+	"strings"
 
 	"context"
 
@@ -13,6 +17,11 @@ import (
 	"github.com/rancher/metadata/k8sproxy"
 	"github.com/rancher/metadata/server"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	resolvConfLocation = "/etc/resolv.conf"
+	ipLocalhost        = `^nameserver\s+((127\.([0-9]{1,3}\.){2}[0-9]{1,3})|(::1)$)`
 )
 
 var (
@@ -112,6 +121,10 @@ func appMain(ctx *cli.Context) error {
 		}
 	}
 
+	if err := validDNSNameServer(); err != nil {
+		return err
+	}
+
 	opts := &client.ClientOpts{
 		Url:       ctx.GlobalString("url"),
 		AccessKey: ctx.GlobalString("access-key"),
@@ -149,4 +162,24 @@ func appMain(ctx *cli.Context) error {
 
 	// Start the server
 	return group.Wait()
+}
+
+// checkDNSNameServer check available dns nameserver, prevent dns lookup error with rancher server domain
+func validDNSNameServer() error {
+	input, err := os.Open(resolvConfLocation)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	scanner := bufio.NewScanner(input)
+	for scanner.Scan() {
+		text := scanner.Text()
+		if strings.HasPrefix(text, "nameserver") {
+			if isloopback, err := regexp.MatchString(ipLocalhost, text); err == nil && !isloopback {
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("Only the loopback IP address configured as the DNS servers on the host file /etc/resolv.conf, can’t accept it, domain names inside container can’t get resolved")
 }
